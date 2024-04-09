@@ -1776,6 +1776,9 @@ protected:
       CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
   int websocket_max_missed_pongs_ = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS;
 
+  template <class HandlersClass, class HandlerClass>
+  Server &set_or_replace_handler(HandlersClass& handlers, const std::string& pattern, HandlerClass handler);
+
   template <class HandlersClass>
   Server &unbind_pattern(HandlersClass& handlers, const std::string& pattern);
 
@@ -10933,6 +10936,18 @@ inline Server &Server::unbind_pattern(HandlersClass& handlers, const std::string
 		return (*this);
 }
 
+template <class HandlersClass, class HandlerClass>
+inline Server &Server::set_or_replace_handler(HandlersClass& handlers, const std::string& pattern, HandlerClass handler) {
+	for (auto h = handlers.begin(); h != handlers.end(); h++) {
+			if (h->first->pattern() == pattern) {
+				handlers.erase(h);
+				break;
+			}
+		}
+
+	return (add_handler(handlers, pattern, std::move(handler)));
+}
+
 inline Server &Server::Unbind(const std::string& method, const std::string& pattern) {
 	if (method == "GET") return unbind_pattern(get_handlers_, pattern);
 	if (method == "POST") {
@@ -10952,51 +10967,51 @@ inline Server &Server::Unbind(const std::string& method, const std::string& patt
 }
 
 inline Server &Server::Get(const std::string &pattern, Handler handler) {
-  return add_handler(get_handlers_, pattern, std::move(handler));
+  return set_or_replace_handler(get_handlers_, pattern, std::move(handler));
 }
 
 inline Server &Server::Post(const std::string &pattern, Handler handler) {
-  return add_handler(post_handlers_, pattern, std::move(handler));
+  return set_or_replace_handler(post_handlers_, pattern, std::move(handler));
 }
 
 inline Server &Server::Post(const std::string &pattern,
                             HandlerWithContentReader handler) {
-  return add_handler(post_handlers_for_content_reader_, pattern,
+  return set_or_replace_handler(post_handlers_for_content_reader_, pattern,
                      std::move(handler));
 }
 
 inline Server &Server::Put(const std::string &pattern, Handler handler) {
-  return add_handler(put_handlers_, pattern, std::move(handler));
+  return set_or_replace_handler(put_handlers_, pattern, std::move(handler));
 }
 
 inline Server &Server::Put(const std::string &pattern,
                            HandlerWithContentReader handler) {
-  return add_handler(put_handlers_for_content_reader_, pattern,
+  return set_or_replace_handler(put_handlers_for_content_reader_, pattern,
                      std::move(handler));
 }
 
 inline Server &Server::Patch(const std::string &pattern, Handler handler) {
-  return add_handler(patch_handlers_, pattern, std::move(handler));
+  return set_or_replace_handler(patch_handlers_, pattern, std::move(handler));
 }
 
 inline Server &Server::Patch(const std::string &pattern,
                              HandlerWithContentReader handler) {
-  return add_handler(patch_handlers_for_content_reader_, pattern,
+  return set_or_replace_handler(patch_handlers_for_content_reader_, pattern,
                      std::move(handler));
 }
 
 inline Server &Server::Delete(const std::string &pattern, Handler handler) {
-  return add_handler(delete_handlers_, pattern, std::move(handler));
+  return set_or_replace_handler(delete_handlers_, pattern, std::move(handler));
 }
 
 inline Server &Server::Delete(const std::string &pattern,
                               HandlerWithContentReader handler) {
-  return add_handler(delete_handlers_for_content_reader_, pattern,
+  return set_or_replace_handler(delete_handlers_for_content_reader_, pattern,
                      std::move(handler));
 }
 
 inline Server &Server::Options(const std::string &pattern, Handler handler) {
-  return add_handler(options_handlers_, pattern, std::move(handler));
+  return set_or_replace_handler(options_handlers_, pattern, std::move(handler));
 }
 
 inline Server &Server::WebSocket(const std::string &pattern,
