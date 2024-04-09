@@ -777,6 +777,10 @@ public:
 
   // Match request path and populate its matches and
   virtual bool match(Request &request) const = 0;
+
+  const std::string pattern;
+protected:
+  MatcherBase(const std::string& p) : pattern(p) {}
 };
 
 /**
@@ -829,7 +833,7 @@ private:
  */
 class RegexMatcher final : public MatcherBase {
 public:
-  RegexMatcher(const std::string &pattern) : regex_(pattern) {}
+  RegexMatcher(const std::string &pattern) : MatcherBase(pattern), regex_(pattern) {}
 
   bool match(Request &request) const override;
 
@@ -877,6 +881,8 @@ public:
   Server &Delete(const std::string &pattern, Handler handler);
   Server &Delete(const std::string &pattern, HandlerWithContentReader handler);
   Server &Options(const std::string &pattern, Handler handler);
+
+  Server &Unbind(const std::string& method, const std::string& pattern);
 
   bool set_base_dir(const std::string &dir,
                     const std::string &mount_point = std::string());
@@ -956,6 +962,9 @@ protected:
   time_t idle_interval_sec_ = CPPHTTPLIB_IDLE_INTERVAL_SECOND;
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+
+  template <class HandlersClass>
+  Server &unbind_pattern(HandlersClass& handlers, const std::string& pattern);
 
 private:
   using Handlers =
@@ -5843,7 +5852,7 @@ inline socket_t BufferStream::socket() const { return 0; }
 
 inline const std::string &BufferStream::get_buffer() const { return buffer; }
 
-inline PathParamsMatcher::PathParamsMatcher(const std::string &pattern) {
+inline PathParamsMatcher::PathParamsMatcher(const std::string &pattern) : MatcherBase (pattern) {
   // One past the last ending position of a path param substring
   std::size_t last_param_end = 0;
 
@@ -5956,6 +5965,35 @@ Server::make_matcher(const std::string &pattern) {
   } else {
     return detail::make_unique<detail::RegexMatcher>(pattern);
   }
+}
+
+template <class HandlersClass>
+inline Server &Server::unbind_pattern(HandlersClass& handlers, const std::string& pattern) {
+	for (auto h = handlers.begin(); h != handlers.end(); h++) {
+			if (h->first->pattern == pattern) {
+				handlers.erase(h);
+				return (*this);
+			}
+		}
+		return (*this);
+}
+
+inline Server &Server::Unbind(const std::string& method, const std::string& pattern) {
+	if (method == "GET") return unbind_pattern(get_handlers_, pattern);
+	if (method == "POST") {
+		unbind_pattern(post_handlers_, pattern);
+		unbind_pattern(post_handlers_for_content_reader_, pattern);
+		return (*this);
+	}
+  if (method == "PATCH") {
+    unbind_pattern(patch_handlers_, pattern);
+    unbind_pattern(patch_handlers_for_content_reader_, pattern);
+		return (*this);
+	}
+	if (method == "DELETE") return unbind_pattern(delete_handlers_, pattern);
+	if (method == "OPTIONS") return unbind_pattern(options_handlers_, pattern);
+
+	return (*this);
 }
 
 inline Server &Server::Get(const std::string &pattern, Handler handler) {
