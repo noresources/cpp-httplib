@@ -1669,6 +1669,8 @@ public:
   Server &WebSocket(const std::string &pattern, WebSocketHandler handler,
                     SubProtocolSelector sub_protocol_selector);
 
+  Server &Unbind(const std::string& method, const std::string& pattern);
+
   bool set_base_dir(const std::string &dir,
                     const std::string &mount_point = std::string());
   bool set_mount_point(const std::string &mount_point, const std::string &dir,
@@ -1773,6 +1775,9 @@ protected:
   time_t websocket_ping_interval_sec_ =
       CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND;
   int websocket_max_missed_pongs_ = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS;
+
+  template <class HandlersClass>
+  Server &unbind_pattern(HandlersClass& handlers, const std::string& pattern);
 
 private:
   using Handlers =
@@ -10915,6 +10920,35 @@ Server::make_matcher(const std::string &pattern) {
   } else {
     return detail::make_unique<detail::RegexMatcher>(pattern);
   }
+}
+
+template <class HandlersClass>
+inline Server &Server::unbind_pattern(HandlersClass& handlers, const std::string& pattern) {
+	for (auto h = handlers.begin(); h != handlers.end(); h++) {
+			if (h->first->pattern() == pattern) {
+				handlers.erase(h);
+				return (*this);
+			}
+		}
+		return (*this);
+}
+
+inline Server &Server::Unbind(const std::string& method, const std::string& pattern) {
+	if (method == "GET") return unbind_pattern(get_handlers_, pattern);
+	if (method == "POST") {
+		unbind_pattern(post_handlers_, pattern);
+		unbind_pattern(post_handlers_for_content_reader_, pattern);
+		return (*this);
+	}
+  if (method == "PATCH") {
+    unbind_pattern(patch_handlers_, pattern);
+    unbind_pattern(patch_handlers_for_content_reader_, pattern);
+		return (*this);
+	}
+	if (method == "DELETE") return unbind_pattern(delete_handlers_, pattern);
+	if (method == "OPTIONS") return unbind_pattern(options_handlers_, pattern);
+
+	return (*this);
 }
 
 inline Server &Server::Get(const std::string &pattern, Handler handler) {
