@@ -953,6 +953,9 @@ protected:
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
 
+  template <class HandlersClass, class HandlerClass>
+  Server &set_or_replace(HandlersClass& handlers, const std::string& pattern, HandlerClass handler);
+
   template <class HandlersClass>
   Server &unbind_pattern(HandlersClass& handlers, const std::string& pattern);
 
@@ -5916,6 +5919,19 @@ inline Server &Server::unbind_pattern(HandlersClass& handlers, const std::string
 		return (*this);
 }
 
+template <class HandlersClass, class HandlerClass>
+inline Server &Server::set_or_replace(HandlersClass& handlers, const std::string& pattern, HandlerClass handler) {
+	for (auto h = handlers.begin(); h != handlers.end(); h++) {
+			if (h->first->pattern == pattern) {
+				handlers.erase(h);
+				break;
+			}
+		}
+
+	handlers.emplace_back(make_matcher(pattern), std::move(handler));
+	return (*this);
+}
+
 inline Server &Server::Unbind(const std::string& method, const std::string& pattern) {
 	if (method == "GET") return unbind_pattern(get_handlers_, pattern);
 	if (method == "POST") {
@@ -5935,20 +5951,16 @@ inline Server &Server::Unbind(const std::string& method, const std::string& patt
 }
 
 inline Server &Server::Get(const std::string &pattern, Handler handler) {
-  get_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return set_or_replace(get_handlers_, pattern, handler);
 }
 
 inline Server &Server::Post(const std::string &pattern, Handler handler) {
-  post_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return set_or_replace(post_handlers_, pattern, handler);
 }
 
 inline Server &Server::Post(const std::string &pattern,
                             HandlerWithContentReader handler) {
-  post_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                 std::move(handler));
-  return *this;
+  return set_or_replace(post_handlers_for_content_reader_, pattern, handler);
 }
 
 inline Server &Server::Put(const std::string &pattern, Handler handler) {
@@ -5958,38 +5970,29 @@ inline Server &Server::Put(const std::string &pattern, Handler handler) {
 
 inline Server &Server::Put(const std::string &pattern,
                            HandlerWithContentReader handler) {
-  put_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                std::move(handler));
-  return *this;
+  return set_or_replace(put_handlers_for_content_reader_, pattern, handler);
 }
 
 inline Server &Server::Patch(const std::string &pattern, Handler handler) {
-  patch_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return set_or_replace(patch_handlers_, pattern, handler);
 }
 
 inline Server &Server::Patch(const std::string &pattern,
                              HandlerWithContentReader handler) {
-  patch_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                  std::move(handler));
-  return *this;
+  return set_or_replace(patch_handlers_for_content_reader_, pattern, handler);
 }
 
 inline Server &Server::Delete(const std::string &pattern, Handler handler) {
-  delete_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return set_or_replace(delete_handlers_, pattern, handler);
 }
 
 inline Server &Server::Delete(const std::string &pattern,
                               HandlerWithContentReader handler) {
-  delete_handlers_for_content_reader_.emplace_back(make_matcher(pattern),
-                                                   std::move(handler));
-  return *this;
+  return set_or_replace(delete_handlers_for_content_reader_, pattern, handler);
 }
 
 inline Server &Server::Options(const std::string &pattern, Handler handler) {
-  options_handlers_.emplace_back(make_matcher(pattern), std::move(handler));
-  return *this;
+  return set_or_replace(options_handlers_, pattern, handler);
 }
 
 inline bool Server::set_base_dir(const std::string &dir,
