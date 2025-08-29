@@ -8507,7 +8507,7 @@ Server::make_matcher(const std::string &pattern) {
 template <class HandlersClass>
 inline Server &Server::unbind_pattern(HandlersClass& handlers, const std::string& pattern) {
 	for (auto h = handlers.begin(); h != handlers.end(); h++) {
-			if (h->first->pattern == pattern) {
+			if (h->first->pattern() == pattern) {
 				handlers.erase(h);
 				return (*this);
 			}
@@ -8518,7 +8518,7 @@ inline Server &Server::unbind_pattern(HandlersClass& handlers, const std::string
 template <class HandlersClass, class HandlerClass>
 inline Server &Server::set_or_replace(HandlersClass& handlers, const std::string& pattern, HandlerClass handler) {
 	for (auto h = handlers.begin(); h != handlers.end(); h++) {
-			if (h->first->pattern == pattern) {
+			if (h->first->pattern() == pattern) {
 				handlers.erase(h);
 				break;
 			}
