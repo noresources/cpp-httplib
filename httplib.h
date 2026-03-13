@@ -1349,6 +1349,15 @@ private:
 struct Response;
 using ResponseHandler = std::function<bool(const Response &response)>;
 
+struct default_value {
+  static const Params params;
+  static const Headers headers;
+};
+#if !defined(HTTPLIB_NO_DEFAULT_VALUE_DEFINITIONS)
+const Params default_value::params;
+const Headers default_value::headers;
+#endif
+
 struct FormData {
   std::string name;
   std::string content;
@@ -2626,8 +2635,8 @@ public:
   // Socket ownership is transferred to StreamHandle for true streaming
   // Supports all HTTP methods (GET, POST, PUT, PATCH, DELETE, etc.)
   StreamHandle open_stream(const std::string &method, const std::string &path,
-                           const Params &params = {},
-                           const Headers &headers = {},
+                           const Params &params = default_value::params,
+                           const Headers &headers = default_value::headers,
                            const std::string &body = {},
                            const std::string &content_type = {});
 
@@ -3012,8 +3021,8 @@ public:
   // Supports all HTTP methods (GET, POST, PUT, PATCH, DELETE, etc.)
   ClientImpl::StreamHandle open_stream(const std::string &method,
                                        const std::string &path,
-                                       const Params &params = {},
-                                       const Headers &headers = {},
+                                       const Params &params = default_value::params,
+                                       const Headers &headers = default_value::headers,
                                        const std::string &body = {},
                                        const std::string &content_type = {});
 
@@ -3856,7 +3865,8 @@ inline Result Get(ClientType &cli, const std::string &path,
 template <typename ClientType>
 inline Result Get(ClientType &cli, const std::string &path,
                   const Headers &headers, size_t chunk_size = 8192) {
-  return Result{cli.open_stream("GET", path, {}, headers), chunk_size};
+	Params params;
+  return Result{cli.open_stream("GET", path, params, headers), chunk_size};
 }
 
 template <typename ClientType>
