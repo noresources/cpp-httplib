@@ -3765,6 +3765,7 @@ struct MbedTlsContext {
   bool is_server = false;
   bool verify_client = false;
   bool has_verify_callback = false;
+  VerifyCallback verify_callback;
 
   MbedTlsContext();
   ~MbedTlsContext();
@@ -3789,6 +3790,7 @@ struct WolfSSLContext {
   bool is_server = false;
   bool verify_client = false;
   bool has_verify_callback = false;
+  VerifyCallback verify_callback;
   std::string ca_pem_data_; // accumulated PEM for get_ca_names/get_ca_certs
 
   WolfSSLContext();
@@ -4131,7 +4133,7 @@ public:
 
   // State accessors
   bool is_connected() const;
-  const std::string &last_event_id() const;
+  std::string last_event_id() const;
 
   // Blocking start - runs event loop with auto-reconnect
   void start();
@@ -4169,6 +4171,7 @@ private:
   std::atomic<bool> running_{false};
   std::atomic<bool> connected_{false};
   std::string last_event_id_;
+  mutable std::mutex last_event_id_mutex_;
 
   // Async support
   std::thread async_thread_;
@@ -4593,7 +4596,8 @@ inline SSEClient &SSEClient::set_headers(const Headers &headers) {
 
 inline bool SSEClient::is_connected() const { return connected_.load(); }
 
-inline const std::string &SSEClient::last_event_id() const {
+inline std::string SSEClient::last_event_id() const {
+  std::lock_guard<std::mutex> lock(last_event_id_mutex_);
   return last_event_id_;
 }
 
@@ -4674,8 +4678,11 @@ inline void SSEClient::run_event_loop() {
       std::lock_guard<std::mutex> lock(headers_mutex_);
       request_headers = headers_;
     }
+    {
+      std::lock_guard<std::mutex> lock(last_event_id_mutex_);
     if (!last_event_id_.empty()) {
       request_headers.emplace("Last-Event-ID", last_event_id_);
+    }
     }
 
     // Open streaming connection
@@ -4738,7 +4745,10 @@ inline void SSEClient::run_event_loop() {
 
         if (event_complete && !current_msg.data.empty()) {
           // Update last_event_id for reconnection
-          if (!current_msg.id.empty()) { last_event_id_ = current_msg.id; }
+          if (!current_msg.id.empty()) {
+            std::lock_guard<std::mutex> lock(last_event_id_mutex_);
+            last_event_id_ = current_msg.id;
+          }
 
           // Dispatch event to appropriate handler
           dispatch_event(current_msg);
@@ -5565,7 +5575,7 @@ inline std::string encode_path(const std::string &s) {
 
 inline std::string file_extension(const std::string &path) {
   std::smatch m;
-  thread_local auto re = std::regex("\\.([a-zA-Z0-9]+)$");
+  static const std::regex re("\\.([a-zA-Z0-9]+)$");
   if (std::regex_search(path, m, re)) { return m[1].str(); }
   return std::string();
 }
@@ -6134,7 +6144,9 @@ inline ssize_t select_impl(socket_t sock, short events, time_t sec,
   pfd.events = events;
   pfd.revents = 0;
 
-  auto timeout = static_cast<int>(sec * 1000 + usec / 1000);
+  auto timeout_ms = static_cast<int64_t>(sec) * 1000 + static_cast<int64_t>(usec) / 1000;
+  if (timeout_ms > INT_MAX) { timeout_ms = INT_MAX; }
+  auto timeout = static_cast<int>(timeout_ms);
 
   return handle_EINTR([&]() { return poll_wrapper(&pfd, 1, timeout); });
 }
@@ -6154,7 +6166,9 @@ inline Error wait_until_socket_is_ready(socket_t sock, time_t sec,
   pfd_read.events = POLLIN | POLLOUT;
   pfd_read.revents = 0;
 
-  auto timeout = static_cast<int>(sec * 1000 + usec / 1000);
+  auto timeout_ms = static_cast<int64_t>(sec) * 1000 + static_cast<int64_t>(usec) / 1000;
+  if (timeout_ms > INT_MAX) { timeout_ms = INT_MAX; }
+  auto timeout = static_cast<int>(timeout_ms);
 
   auto poll_res =
       handle_EINTR([&]() { return poll_wrapper(&pfd_read, 1, timeout); });
@@ -6913,9 +6927,9 @@ inline std::string if2ip(int address_family, const std::string &ifn) {
          ifa->ifa_addr->sa_family == address_family)) {
       if (ifa->ifa_addr->sa_family == AF_INET) {
         auto sa = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
-        char buf[INET_ADDRSTRLEN];
+        char buf[INET_ADDRSTRLEN] = {};
         if (inet_ntop(AF_INET, &sa->sin_addr, buf, INET_ADDRSTRLEN)) {
-          return std::string(buf, INET_ADDRSTRLEN);
+          return std::string(buf);
         }
       } else if (ifa->ifa_addr->sa_family == AF_INET6) {
         auto sa = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
@@ -6925,9 +6939,9 @@ inline std::string if2ip(int address_family, const std::string &ifn) {
             // equivalent to mac's IN6_IS_ADDR_UNIQUE_LOCAL
             auto s6_addr_head = sa->sin6_addr.s6_addr[0];
             if (s6_addr_head == 0xfc || s6_addr_head == 0xfd) {
-              addr_candidate = std::string(buf, INET6_ADDRSTRLEN);
+              addr_candidate = std::string(buf);
             } else {
-              return std::string(buf, INET6_ADDRSTRLEN);
+              return std::string(buf);
             }
           }
         }
@@ -9532,8 +9546,7 @@ inline bool parse_www_authenticate(const Response &res,
                                    bool is_proxy) {
   auto auth_key = is_proxy ? "Proxy-Authenticate" : "WWW-Authenticate";
   if (res.has_header(auth_key)) {
-    thread_local auto re =
-        std::regex(R"~((?:(?:,\s*)?(.+?)=(?:"(.*?)"|([^,]*))))~");
+    static const std::regex re(R"~((?:(?:,\s*)?(.+?)=(?:"(.*?)"|([^,]*))))~");
     auto s = res.get_header_value(auth_key);
     auto pos = s.find(' ');
     if (pos != std::string::npos) {
@@ -10773,7 +10786,7 @@ inline std::string sanitize_filename(const std::string &filename) {
 inline std::string append_query_params(const std::string &path,
                                        const Params &params) {
   std::string path_with_query = path;
-  thread_local const std::regex re("[^?]+\\?.*");
+  static const std::regex re("[^?]+\\?.*");
   auto delm = std::regex_match(path, re) ? '&' : '?';
   path_with_query += delm + detail::params_to_query_str(params);
   return path_with_query;
@@ -17473,15 +17486,13 @@ inline PeerCert get_peer_cert_from_session(const_session_t session) {
 
 namespace impl {
 
-inline VerifyCallback &get_verify_callback() {
-  static thread_local VerifyCallback callback;
-  return callback;
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+inline int get_ssl_ctx_verify_cb_idx() {
+  static const int idx =
+      SSL_CTX_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+  return idx;
 }
-
-inline VerifyCallback &get_mbedtls_verify_callback() {
-  static thread_local VerifyCallback callback;
-  return callback;
-}
+#endif
 
 // Check if a string is an IPv4 address
 inline bool is_ipv4_address(const std::string &str) {
@@ -17810,13 +17821,18 @@ inline STACK_OF(X509_NAME) *
 
 // OpenSSL verify callback wrapper
 inline int openssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
-  auto &callback = get_verify_callback();
-  if (!callback) { return preverify_ok; }
-
   // Get SSL object from X509_STORE_CTX
   auto ssl = static_cast<SSL *>(
       X509_STORE_CTX_get_ex_data(ctx, SSL_get_ex_data_X509_STORE_CTX_idx()));
   if (!ssl) { return preverify_ok; }
+
+  // Retrieve the VerifyCallback stored in the SSL_CTX ex_data — this is
+  // safe from any thread because the callback is keyed on the context object,
+  // not on the calling thread's TLS slot.
+  auto ssl_ctx = SSL_get_SSL_CTX(ssl);
+  auto *callback = static_cast<VerifyCallback *>(
+      SSL_CTX_get_ex_data(ssl_ctx, get_ssl_ctx_verify_cb_idx()));
+  if (!callback || !*callback) { return preverify_ok; }
 
   // Get current certificate and depth
   auto cert = X509_STORE_CTX_get_current_cert(ctx);
@@ -17833,7 +17849,7 @@ inline int openssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx) {
   verify_ctx.error_string =
       (error != X509_V_OK) ? X509_verify_cert_error_string(error) : nullptr;
 
-  return callback(verify_ctx) ? 1 : 0;
+  return (*callback)(verify_ctx) ? 1 : 0;
 }
 
 // X509_STORE_get0_objects is deprecated since OpenSSL 4.0 because it is not
@@ -17874,7 +17890,11 @@ inline ctx_t create_client_context() {
 }
 
 inline void free_context(ctx_t ctx) {
-  if (ctx) { SSL_CTX_free(static_cast<SSL_CTX *>(ctx)); }
+  if (!ctx) { return; }
+  auto ssl_ctx = static_cast<SSL_CTX *>(ctx);
+  delete static_cast<VerifyCallback *>(
+      SSL_CTX_get_ex_data(ssl_ctx, impl::get_ssl_ctx_verify_cb_idx()));
+  SSL_CTX_free(ssl_ctx);
 }
 
 inline bool set_min_version(ctx_t ctx, Version version) {
@@ -18687,9 +18707,19 @@ inline bool set_verify_callback(ctx_t ctx, VerifyCallback callback) {
   if (!ctx) { return false; }
   auto ssl_ctx = static_cast<SSL_CTX *>(ctx);
 
-  impl::get_verify_callback() = std::move(callback);
+  // Replace any previously stored callback, then store the new one on the
+  // SSL_CTX so worker threads can retrieve it without touching thread_local.
+  delete static_cast<VerifyCallback *>(
+      SSL_CTX_get_ex_data(ssl_ctx, impl::get_ssl_ctx_verify_cb_idx()));
 
-  if (impl::get_verify_callback()) {
+  VerifyCallback *cb = nullptr;
+  if (callback) {
+    cb = new (std::nothrow) VerifyCallback(std::move(callback));
+    if (!cb) { return false; }
+  }
+  SSL_CTX_set_ex_data(ssl_ctx, impl::get_ssl_ctx_verify_cb_idx(), cb);
+
+  if (cb) {
     SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, impl::openssl_verify_callback);
   } else {
     SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, nullptr);
@@ -18732,6 +18762,9 @@ struct MbedTlsSession {
   socket_t sock = INVALID_SOCKET;
   std::string hostname;     // For client: set via set_sni
   std::string sni_hostname; // For server: received from client via SNI callback
+  VerifyCallback verify_callback;
+  bool has_peeked_byte = false;
+  unsigned char peeked_byte = 0;
 
   // Mbed TLS has no SSL_peek() equivalent, so is_peer_closed() must probe with
   // a real 1-byte mbedtls_ssl_read(). If that probe lands on application data
@@ -18943,10 +18976,15 @@ inline int mbedtls_verify_callback(void *data, mbedtls_x509_crt *crt,
                                    int cert_depth, uint32_t *flags);
 
 // MbedTLS verify callback wrapper
+// data points to the MbedTlsSession (set via mbedtls_ssl_set_verify per-session).
+// When data is null (conf-level fallback), skip custom verification.
 inline int mbedtls_verify_callback(void *data, mbedtls_x509_crt *crt,
                                    int cert_depth, uint32_t *flags) {
   // data points to the MbedTlsSession
+  if (!data) { return 0; }
   auto *session = static_cast<MbedTlsSession *>(data);
+  auto &callback = session->verify_callback;
+  if (!callback) { return 0; }
 
   // set_sni() disabled hostname verification for this session: drop the
   // CN/SAN mismatch flag so it doesn't fail the chain check below, mirroring
@@ -18969,7 +19007,7 @@ inline int mbedtls_verify_callback(void *data, mbedtls_x509_crt *crt,
   verify_ctx.error_code = static_cast<long>(*flags);
 
   // Convert Mbed TLS flags to error string
-  static thread_local char error_buf[256];
+  char error_buf[256];
   if (*flags != 0) {
     mbedtls_x509_crt_verify_info(error_buf, sizeof(error_buf), "", *flags);
     verify_ctx.error_string = error_buf;
@@ -19377,6 +19415,7 @@ inline session_t create_session(ctx_t ctx, socket_t sock) {
   // registered
   session->has_verify_callback = mctx->has_verify_callback;
   if (mctx->has_verify_callback) {
+    session->verify_callback = mctx->verify_callback;
     mbedtls_ssl_set_verify(&session->ssl, impl::mbedtls_verify_callback,
                            session);
   }
@@ -20115,14 +20154,15 @@ inline bool set_verify_callback(ctx_t ctx, VerifyCallback callback) {
   if (!ctx) { return false; }
   auto *mbed_ctx = static_cast<impl::MbedTlsContext *>(ctx);
 
-  impl::get_verify_callback() = std::move(callback);
-  mbed_ctx->has_verify_callback =
-      static_cast<bool>(impl::get_verify_callback());
+  mbed_ctx->verify_callback = std::move(callback);
+  mbed_ctx->has_verify_callback = static_cast<bool>(mbed_ctx->verify_callback);
 
   if (mbed_ctx->has_verify_callback) {
     // Set OPTIONAL mode to ensure callback is called even when verification
     // is disabled (matching OpenSSL behavior where SSL_VERIFY_PEER is set)
     mbedtls_ssl_conf_authmode(&mbed_ctx->conf, MBEDTLS_SSL_VERIFY_OPTIONAL);
+    // Pass mbed_ctx as data; per-session override in create_session will
+    // replace this with the session pointer so the callback has full context.
     mbedtls_ssl_conf_verify(&mbed_ctx->conf, impl::mbedtls_verify_callback,
                             nullptr);
   } else {
@@ -20174,6 +20214,7 @@ struct WolfSSLSession {
   socket_t sock = INVALID_SOCKET;
   std::string hostname;     // For client: set via set_sni
   std::string sni_hostname; // For server: received from client via SNI callback
+  VerifyCallback verify_callback;
 
   WolfSSLSession() = default;
 
@@ -20253,16 +20294,18 @@ inline int wolfssl_sni_callback(WOLFSSL *ssl, int *ret, void *exArg) {
 // wolfSSL verify callback wrapper
 inline int wolfssl_verify_callback(int preverify_ok,
                                    WOLFSSL_X509_STORE_CTX *x509_ctx) {
-  auto &callback = get_verify_callback();
-  if (!callback) { return preverify_ok; }
+  // Retrieve the WOLFSSL object, then our WolfSSLSession via ex_data index 0.
+  WOLFSSL *ssl = static_cast<WOLFSSL *>(wolfSSL_X509_STORE_CTX_get_ex_data(
+      x509_ctx, wolfSSL_get_ex_data_X509_STORE_CTX_idx()));
+  if (!ssl) { return preverify_ok; }
+
+  auto *wsession =
+      static_cast<WolfSSLSession *>(wolfSSL_get_ex_data(ssl, 0));
+  if (!wsession || !wsession->verify_callback) { return preverify_ok; }
 
   WOLFSSL_X509 *cert = wolfSSL_X509_STORE_CTX_get_current_cert(x509_ctx);
   int depth = wolfSSL_X509_STORE_CTX_get_error_depth(x509_ctx);
   int err = wolfSSL_X509_STORE_CTX_get_error(x509_ctx);
-
-  // Get the WOLFSSL object from the X509_STORE_CTX
-  WOLFSSL *ssl = static_cast<WOLFSSL *>(wolfSSL_X509_STORE_CTX_get_ex_data(
-      x509_ctx, wolfSSL_get_ex_data_X509_STORE_CTX_idx()));
 
   VerifyContext verify_ctx;
   verify_ctx.session = static_cast<session_t>(ssl);
@@ -20277,7 +20320,7 @@ inline int wolfssl_verify_callback(int preverify_ok,
     verify_ctx.error_string = nullptr;
   }
 
-  bool accepted = callback(verify_ctx);
+  bool accepted = wsession->verify_callback(verify_ctx);
   return accepted ? 1 : 0;
 }
 
@@ -20543,6 +20586,14 @@ inline session_t create_session(ctx_t ctx, socket_t sock) {
   }
 
   wolfSSL_set_fd(session->ssl, static_cast<int>(sock));
+
+  // Copy the verify callback from the context and store a pointer to this
+  // session in ex_data slot 0 so wolfssl_verify_callback can retrieve it
+  // from any worker thread without thread_local indirection.
+  if (wctx->has_verify_callback) {
+    session->verify_callback = wctx->verify_callback;
+    wolfSSL_set_ex_data(session->ssl, 0, session);
+  }
 
   return static_cast<session_t>(session);
 }
@@ -21253,8 +21304,8 @@ inline bool set_verify_callback(ctx_t ctx, VerifyCallback callback) {
   if (!ctx) { return false; }
   auto *wctx = static_cast<impl::WolfSSLContext *>(ctx);
 
-  impl::get_verify_callback() = std::move(callback);
-  wctx->has_verify_callback = static_cast<bool>(impl::get_verify_callback());
+  wctx->verify_callback = std::move(callback);
+  wctx->has_verify_callback = static_cast<bool>(wctx->verify_callback);
 
   if (wctx->has_verify_callback) {
     wolfSSL_CTX_set_verify(wctx->ctx, SSL_VERIFY_PEER,
