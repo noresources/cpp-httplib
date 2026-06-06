@@ -4593,7 +4593,7 @@ inline std::string base64_encode(const std::string &in) {
   std::string out;
   out.reserve(in.size());
 
-  auto val = 0;
+  auto val = 0u;
   auto valb = -6;
 
   for (auto c : in) {
